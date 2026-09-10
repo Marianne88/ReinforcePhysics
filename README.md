@@ -205,12 +205,10 @@ The framework does not assume a particular ultraviolet (UV) model. The goal is i
 
 ## Paper
 
-A very brief description of the method can be found in the paper:
-
 **J. Kumar, M. Bouchard, and D. London,
 "Searching for New Physics with Reinforcement Learning"**
 
-Universality: [https://arxiv.org/pdf/2609.10382]
+ArXiv: [https://arxiv.org/pdf/2609.10382]
 
 ---
 
