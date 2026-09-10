@@ -216,7 +216,7 @@ Universality: [https://arxiv.org/pdf/2609.10382]
 
 ## Citation
 
-If you use PhysRL in your research, please cite:
+If you use ReinforcePhysics in your research, please cite:
 
 ```bibtex
 @article{Kumar:2026zpo,
