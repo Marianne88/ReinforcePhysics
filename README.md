@@ -241,7 +241,7 @@ See [`LICENSE`](LICENSE) for details.
 
 ## Acknowledgements
 
-Many grateful to @skumarudel (Sajan Kumar) for being always available for discussions and helping.  
+Many thanks to @skumarudel (Sajan Kumar) for being always available for discussions and helping in writing the codes.  
 
 ---
 
