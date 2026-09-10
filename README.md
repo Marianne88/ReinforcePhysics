@@ -241,8 +241,7 @@ See [`LICENSE`](LICENSE) for details.
 
 ## Acknowledgements
 
-
-Computations were performed using resources provided through the Digital Research Alliance of Canada, including the Trillium supercomputer at the SciNet HPC Consortium and the Rorqual supercomputer provided by Calcul Québec.
+Many grateful to @skumarudel (Sajan Kumar) for being always available for discussions and helping.  
 
 ---
 
