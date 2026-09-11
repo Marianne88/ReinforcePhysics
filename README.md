@@ -91,22 +91,6 @@ The implementation described in the paper uses **flavio** for observable calcula
 
 ---
 
-## Results
-
-
-## Installation
-
-> **Note:** Installation instructions will be added as the package and its dependencies are finalized.
-
-A typical installation will be:
-
-```bash
-git clone https://github.com/<USERNAME>/PhysRL.git
-cd PhysRL
-
-pip install -e .
-```
-
 ---
 
 ## Dependencies
@@ -121,39 +105,6 @@ ReinforcePhysics relies on scientific and machine-learning software including:
 * SciPy
 
 A complete dependency specification will be provided in `requirements.txt` / `pyproject.toml`.
-
----
-
-## Repository structure
-
-The repository is organized approximately as follows:
-
-```text
-ReinforcePhysics/
-│
-├── physrl/
-│   ├── agent/
-│   ├── models/
-│   ├── environment/
-│   ├── physics/
-│   ├── training/
-│   └── utils/
-│
-├── examples/
-│
-├── configs/
-│
-├── results/
-│
-├── tests/
-│
-├── requirements.txt
-├── pyproject.toml
-├── LICENSE
-└── README.md
-```
-
-The exact structure may evolve as the package develops.
 
 ---
 
