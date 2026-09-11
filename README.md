@@ -193,13 +193,6 @@ Experimental data
 
 The policy progressively learns which SMEFT operators are most effective at improving the global fit.
 
----
-
-## Scientific scope
-
-The current implementation focuses on the **bottom-up SMEFT analysis** of experimental anomalies: identifying SMEFT operators capable of explaining deviations in observables.
-
-The framework does not assume a particular ultraviolet (UV) model. The goal is instead to efficiently search the SMEFT operator space and identify viable combinations that can subsequently be investigated from a top-down perspective.
 
 ---
 
