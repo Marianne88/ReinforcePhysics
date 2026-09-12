@@ -1,7 +1,6 @@
 #### Code Availability
 
-This repository contains all the codes used to reproduce the results presented in [arXiv:2609.10382](https://arxiv.org/abs/2609.10382).
-
+This repository contains all the codes used to reproduce the results presented in [arXiv:2609.10382](https://arxiv.org/abs/2609.10382), as well as a brief description of how they were developed as well as dependencies.
 
 # ReinforcePhysics
 
