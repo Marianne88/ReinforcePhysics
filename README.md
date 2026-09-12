@@ -10,7 +10,7 @@ This repository contains all the codes used to reproduce the results presented i
 
 The framework formulates the search for SMEFT operators that explain experimental anomalies as a **sequential decision-making problem**. An RL policy proposes SMEFT operators one at a time, while an observable calculator and global-fit procedure evaluate how each proposal improves the agreement between theory and experimental data.
 
-The method is designed to explore the large and highly correlated SMEFT operator space without relying on phenomenological intuition to preselect the relevant operators.
+The method is designed to explore the large and highly correlated SMEFT operator space without relying on phenomenological intuition.
 
 ---
 
