@@ -1,11 +1,11 @@
+#### Code Availability
+
+This repository contains all the codes used to reproduce the results presented in [arXiv:2609.10382](https://arxiv.org/abs/2609.10382).
+
+
 # ReinforcePhysics
 
 ### A new method for sequential decision-making for selecting physics interactions with Reinforcement Learning
-
-
-### Code Availability
-
-This repository contains all the codes used to reproduce the results presented in [arXiv:2609.10382](https://arxiv.org/abs/2609.10382).
 
 **ReinforcePhysics** is a reinforcement-learning framework for efficiently searching for new physics interactions (of effective operators) using the **Standard Model Effective Field Theory (SMEFT)**.
 
