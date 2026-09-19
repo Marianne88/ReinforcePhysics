@@ -5,7 +5,6 @@ import torch.nn as nn
 
 import os
 import json
-import scipy.stats
 
 import warnings
 import flavio
@@ -15,11 +14,11 @@ from iminuit import Minuit
 import time
 
 from dataclasses import dataclass, field
-from typing import List, Dict
+from typing import List
 
 debut = time.time()
 
-constraints_ewp = [
+OBS_NAMES = [
     'GammaZ', 'sigma_had', 'R_e', 'R_mu', 'R_tau',
     'AFB(Z->ee)', 'AFB(Z->mumu)', 'AFB(Z->tautau)',
     'A(Z->ee)', 'A(Z->mumu)', 'A(Z->tautau)', 
@@ -29,11 +28,9 @@ constraints_ewp = [
     'R(W->cX)', 'Rmue(W->lnu)', 'Rtaue(W->lnu)', 'Rtaumu(W->lnu)', 'A(Z->ss)']
 
 
-OBS_NAMES = constraints_ewp
-
 COEFFICIENTS_PATH = "ewp_linear_coefficients_2.json"
 
-# --- Override m_W Measurement ---
+# --- Override m_W Measurement --- #
 mW_new_central = 80.411  # GeV
 mW_new_error = 0.008    # GeV
 
@@ -47,32 +44,27 @@ for name in list(flavio.Measurement.instances.keys()):
 my_mW = flavio.Measurement('CDF_measurement')
 my_mW.add_constraint(['m_W'],flavio.statistics.probability.NormalDistribution(mW_new_central, mW_new_error))
 
-
 with open(COEFFICIENTS_PATH, "r", encoding="utf-8") as f: ewp_data = json.load(f)
 
 ewp_coefficients = ewp_data["observables"]
 
-def predict_ewp(obs: str, wc_dict: dict) -> float:
-    """Computes linearized SMEFT prediction for a single observable."""
-    if obs not in ewp_coefficients: raise KeyError(f"Observable '{obs}' not found in loaded JSON data.")
 
-    data = ewp_coefficients[obs]
-
-    # Fall back to 0.0 if sm_prediction isn't present
-    sm = data.get("sm_prediction", 0.0)
+def predict_observables(wc_dict):
+    def predict_ewp(obs: str, wc_dict: dict) -> float:
+        """Computes linearized SMEFT prediction for a single observable."""
+        if obs not in ewp_coefficients: raise KeyError(f"Observable '{obs}' not found in loaded JSON data.")
     
-    # Safely get coefficients (defaults to empty dict if key is missing)
-    coeffs = data.get("absolute_coefficients", {})
+        data = ewp_coefficients[obs]
     
-    # Compatibility check in case the JSON key is named "coefficients"
-    if not coeffs and "coefficients" in data: coeffs = data["coefficients"]
-
-    delta = sum(coeffs[wc] * val for wc, val in wc_dict.items() if wc in coeffs)
-    return sm *(1+ delta)
-
-def predict_observables(wc_dict: dict) -> dict:
-    """Computes predictions for all observables in constraints_ewp."""
-    return {obs: predict_ewp(obs, wc_dict) for obs in constraints_ewp}
+        # Fall back to 0.0 if sm_prediction isn't present
+        sm = data.get("sm_prediction", 0.0)
+        
+        coeffs = data["coefficients"]
+    
+        delta = sum(coeffs[wc] * val for wc, val in wc_dict.items() if wc in coeffs)
+        return sm *(1+ delta)
+    """Computes predictions for all observables in OBS_NAMES."""
+    return np.array([predict_ewp(obs, wc_dict) for obs in OBS_NAMES])
 
 
 def get_experimental_constraint(obs_name: str) -> tuple:
@@ -97,29 +89,25 @@ def get_experimental_constraint(obs_name: str) -> tuple:
 
     raise ValueError(f"No experimental constraint found for {obs_name}")
     
-observables = {}
-errors = {}
-errors_squared = {}
 
-for obs in constraints_ewp:
-    exp, sigma = get_experimental_constraint(obs)        
-    sigma2 = sigma**2 + flavio.sm_uncertainty(obs, N=1000)**2
+EXP_CENTRAL = []
+EXP_SIGMA = []
+EXP_SIGMA2 = []
+
+for obs in OBS_NAMES:
+    exp, sigma = get_experimental_constraint(obs)
+    sigma2 = sigma**2 + flavio.sm_uncertainty(obs, N=100)**2
     
-    observables.update({obs:exp})
-    errors.update({obs:np.sqrt(sigma2)})
-    errors_squared.update({obs:sigma2})
+    EXP_CENTRAL.append(exp)
+    EXP_SIGMA.append(np.sqrt(sigma2))
+    EXP_SIGMA2.append(sigma2)
 
-EXP_CENTRAL = np.array([   observables[obs] for obs in constraints_ewp], dtype=float)
-EXP_SIGMA   = np.array([        errors[obs] for obs in constraints_ewp], dtype=float)
-EXP_SIGMA2  = np.array([errors_squared[obs] for obs in constraints_ewp], dtype=float)
-   
 
-def compute_chi2(predictions: dict) -> float:    
-    return sum((prediction - observables[obs])**2 / errors_squared[obs]
-        for obs, prediction in predictions.items())
-
+def compute_chi2(predictions: list) -> float:
+    return np.sum((predictions - EXP_CENTRAL)**2 / EXP_SIGMA2)
+        
 # Run after helper functions are defined
-CHI2_SM: float = float(compute_chi2(predict_observables({})))
+CHI2_SM = compute_chi2(predict_observables({}))
 print(f"[chi2_reward] chi2_SM = {CHI2_SM:.6f}")
 
 
@@ -142,31 +130,22 @@ def _minimise_chi2(wc_names: list) -> tuple:
     return chi2_min, best_wc
 
 def _build_chi2_fn(wc_names: list):
-    n = len(wc_names)
-
     def chi2(*values):
         try:
-            wc_dict = {wc_names[i]: float(values[i]) for i in range(n)}
-
-            if any(abs(v) > 1e7 for v in wc_dict.values()): return 1e20
+            wc_dict = {wc_names[i]: float(values[i]) for i in range(len(wc_names))}
 
             predictions = predict_observables(wc_dict)
             result = compute_chi2(predictions)
 
-            if not np.isfinite(result): return 1e20
+            return float(result) if np.isfinite(result) else 1e20
 
-            return float(result)
-
-        except Exception as e:
-            print(f"[chi2] Exception: {e}")
-            return 1e20
+        except Exception as e: print(f"[chi2] Exception: {e}")
 
     fn_src = (f"def chi2_named({', '.join(wc_names)}):\n" f"    return chi2({', '.join(wc_names)})\n")
 
     globs = {"chi2": chi2}
     exec(fn_src, globs)
     return globs["chi2_named"]
-
 
 
 def flavio_pull_fn(fired_ops: list) -> tuple:
@@ -178,23 +157,26 @@ def flavio_pull_fn(fired_ops: list) -> tuple:
         
     else: chi2_min, best_wc = _minimise_chi2(fired_ops)
 
-    prediction_dict = predict_observables(best_wc)
-
-    predictions = np.asarray([prediction_dict[obs] for obs in constraints_ewp], dtype=float)
+    predictions = predict_observables(best_wc)
 
     pulls = (predictions - EXP_CENTRAL) / EXP_SIGMA
 
     if not np.all(np.isfinite(pulls)): raise ValueError(f"Non-finite pulls encountered: {pulls}")
     if np.max(np.abs(pulls)) > 10000:  raise ValueError(f"Unphysical pull detected: {pulls}")
 
-    return pulls.tolist(), float(chi2_min), predictions.tolist(), best_wc
+    return pulls.tolist(), float(chi2_min), predictions.tolist()#, best_wc
 
-BASELINE_PULLS, _, BASELINE_PREDICTIONS, _ = flavio_pull_fn([])
+BASELINE_PULLS, _, BASELINE_PREDICTIONS = flavio_pull_fn([])
 
 for obs_name, prediction, central, sigma, pull in zip(
-    constraints_ewp, BASELINE_PREDICTIONS, EXP_CENTRAL, EXP_SIGMA, BASELINE_PULLS):
-    print(f"{obs_name:20s} " f"SM={prediction:.6g} "  f"exp={central:.6g} " f"sigma={sigma:.6g} " f"pull={pull:.3f}")
+    OBS_NAMES, BASELINE_PREDICTIONS, EXP_CENTRAL, EXP_SIGMA, BASELINE_PULLS):
+    print(f"{obs_name:20s} SM={prediction:.6g} exp={central:.6g} sigma={sigma:.6g} pull={pull:.3f}")
 
+
+# _, test_chi2, _ = flavio_pull_fn([ 'phid_33', 'phiq1_23'])
+# _, test_chi2, _ = flavio_pull_fn([ 'll_1122'])
+
+# print("\n\n", 53.8 - test_chi2, "\n\n")
 
 @dataclass
 class SMEFTState:
@@ -207,16 +189,6 @@ class SMEFTState:
         assert len(self.obs_names) == len(self.pulls), \
             f"obs_names ({len(self.obs_names)}) and pulls ({len(self.pulls)}) length mismatch"
 
-    def pulls_dict(self) -> Dict[str, float]:
-        return dict(zip(self.obs_names, self.pulls))
-
-    def top_pulls(self, k: int = 5) -> List[tuple]:
-        return sorted(self.pulls_dict().items(), key=lambda kv: -abs(kv[1]))[:k]
-
-    def __repr__(self) -> str:
-        obs_str = "\n".join(f"  {n}: {p:+.3f}" for n, p in zip(self.obs_names, self.pulls))
-        ops_str = ", ".join(self.fired_ops) if self.fired_ops else "(none)"
-        return f"SMEFTState(\n{obs_str}\n  Ops fired: [{ops_str}]\n  Chi2: {self.chi2:.4f}\n)"
     def copy(self):
          new_state = SMEFTState(pulls=np.copy(self.pulls), chi2=self.chi2, obs_names=self.obs_names)
          new_state.active_ops = list(self.active_ops) if hasattr(self, 'active_ops') else []
@@ -237,15 +209,13 @@ warnings.filterwarnings("ignore")
 
 def _build_catalogue_from_wcxf() -> dict[str, list[str]]:
     """
-    Query the wcxf package for every WC in the SMEFT Warsaw basis and
-    organise them by their wcxf 'sector' label.
+    Query the wcxf package for every WC in the SMEFT Warsaw basis and organise them by their wcxf 'sector' label.
     """
 
     basis_obj = wcxf.Basis["SMEFT", "Warsaw"]
     catalogue: dict[str, list[str]] = {}
 
     for sector_name, sector_data in basis_obj.sectors.items():
-
         if sector_name == "dB=de=dmu=dtau=0":
             wcs = sorted(sector_data.keys())
             if wcs: catalogue[sector_name] = wcs
@@ -253,9 +223,9 @@ def _build_catalogue_from_wcxf() -> dict[str, list[str]]:
     return catalogue
 
 
-OPERATOR_CATALOGUE: dict[str, list[str]] = _build_catalogue_from_wcxf()
+OPERATOR_CATALOGUE = _build_catalogue_from_wcxf()
 
-operator_vocab: list[str] = [wc for ops in OPERATOR_CATALOGUE.values() for wc in ops]
+operator_vocab = [wc for ops in OPERATOR_CATALOGUE.values() for wc in ops]
 
 # VOCAB_FILE = Path("vocab_0f2f.txt")
 
@@ -273,15 +243,14 @@ np.random.seed(SEED)
 torch.manual_seed(SEED)
 torch.cuda.manual_seed_all(SEED)
 
-
 n_ops = len(operator_vocab)
-n_obs = len(constraints_ewp)
+n_obs = len(OBS_NAMES)
 
 M_ij = np.zeros((n_ops,n_obs), dtype=np.float32)
 print("M_ij shape =", M_ij.shape)
 
 print("operator_vocab =", len(operator_vocab))
-print("constraints =", len(constraints_ewp))
+print("constraints =", len(OBS_NAMES))
 
 
 # BOTH actor and critic receive this SAME state.
@@ -328,8 +297,6 @@ class SMEFTActorCritic(nn.Module):
 
         # STATE ENCODING
 
-        # ====================================================
-
         # Operator identity
         self.op_embed = nn.Embedding(self.num_ops, embed_dim)
 
@@ -360,67 +327,36 @@ class SMEFTActorCritic(nn.Module):
         # ====================================================
 
         # Critic receives a pooled representation of the SAME operator-level state representation used by actor together with global state
-
         self.critic_head = nn.Sequential(
             nn.Linear(embed_dim * 6, embed_dim), nn.ReLU(), 
             nn.Linear(embed_dim, embed_dim // 2), nn.ReLU(), 
             nn.Linear(embed_dim // 2, 1))
 
         # Trainable scaling parameters
-
         self.alpha = nn.Parameter(torch.tensor(alpha_init, dtype=torch.float32))
         self.beta = nn.Parameter(torch.tensor(pull_gain, dtype=torch.float32))
     
     # ========================================================
-
     # STATE ENCODER
-
     # ========================================================
 
     def encode_state(self, state, fired_ops=None):
-
         """
         Construct ONE explicit representation of s_t.
-        This function is the central guarantee that actor and
-        critic receive the SAME state.
-        Returns
-        -------
-
-        operator_state : (num_ops, embed_dim * 5)
-            Per-operator representation containing:
-                operator identity
-                pull/attention representation
-                active status
-                fired status
-
-        global_state : (1, embed_dim)
-
-            Global state containing: chi2, step
-
+        This function is the central guarantee that actor and critic receive the SAME state.
         """
 
         device = self.M.device
 
-        # ----------------------------------------------------
-
-        # Pulls
-
-        # ----------------------------------------------------
-
         pulls_data = (state.pulls if hasattr(state, "pulls") else state["pulls"])
 
         if not isinstance(pulls_data, torch.Tensor): pulls_tensor = torch.tensor(pulls_data, dtype=torch.float32, device=device)
-
         else: pulls_tensor = pulls_data.to(device=device, dtype=torch.float32)
-
         if pulls_tensor.ndim != 1: pulls_tensor = pulls_tensor.flatten()
-
         if pulls_tensor.numel() != self.num_obs: raise ValueError(f"Expected {self.num_obs} pulls, " f"got {pulls_tensor.numel()}")
 
         # ----------------------------------------------------
-
         # Current chi2
-
         # ----------------------------------------------------
 
         chi2 = float(getattr(state, "chi2", state.get("chi2", 0.0) if isinstance(state, dict) else 0.0))
@@ -458,11 +394,8 @@ class SMEFTActorCritic(nn.Module):
 
 
         active_repr = self.active_embed(active_mask)
-
         fired_repr = self.fired_embed(fired_mask)
-
         global_scalar_state = torch.tensor([chi2_normalized, step_fraction], dtype=torch.float32, device=device).unsqueeze(0)
-
         global_repr = self.global_state_encoder(global_scalar_state)
 
         # Broadcast global state to every operator
@@ -517,14 +450,7 @@ class SMEFTActorCritic(nn.Module):
 
         state_value = self.critic_head(critic_input).squeeze()
 
-        diagnostics = {
-            "base_logits": neural_logits.detach(),
-            "pulls": pulls_tensor.detach().cpu().numpy(),
-            "active_mask": active_mask.detach().cpu().numpy(),
-            "fired_mask": fired_mask.detach().cpu().numpy(),
-        }
-
-        return (final_logits, state_value, attn_weights.squeeze(0), diagnostics)
+        return (final_logits, state_value, attn_weights.squeeze(0))#, diagnostics)
 
 
 # ============================================================
@@ -532,7 +458,6 @@ class SMEFTActorCritic(nn.Module):
 # ============================================================
 
 def compute_step_rewards(history, alpha_step=0.1, dead_step_penalty=0.5, min_delta_chi2=1e-3, solved_bonus=10.0, chi2_threshold=1e-6):
-
     """
     One reward for every action. delta_chi2 = trial_chi2 - old_chi2
     Hence chi2_drop = -delta_chi2 is positive when the action improves the fit.
@@ -542,7 +467,7 @@ def compute_step_rewards(history, alpha_step=0.1, dead_step_penalty=0.5, min_del
     for step in history:
     
         delta = float(step["delta_chi2"])
-        reward = -delta - alpha_step
+        reward = - delta - alpha_step
 
         if -delta < min_delta_chi2: reward -= dead_step_penalty
 
@@ -562,11 +487,12 @@ def compute_returns_to_go(step_rewards, gamma=0.99):
     G_t = r_t + gamma r_{t+1} + gamma^2 r_{t+2} + ...
     This is the Monte-Carlo estimate used as: G_t ~ Q^pi(s_t, a_t)
     """
-    returns = [0.0 for _ in step_rewards]
+    len_step_rewards = len(step_rewards)
+    returns = [0.0]*len_step_rewards
 
     running = 0.0
 
-    for t in reversed(range(len(step_rewards))):
+    for t in range(len_step_rewards - 1, -1, -1):
         running = ( step_rewards[t] + gamma * running )
         returns[t] = running
 
@@ -614,17 +540,11 @@ def compute_rollout_reward( final_state, baseline_chi2, trajectory_length=None, 
 # ============================================================
 
 class RunningReturnNormalizer:
-
     """
-
     Running normalization of Monte-Carlo returns.
-
     The critic therefore learns a normalized value:
-
         V_phi(s) ~ normalized G_t
-
     rather than a value on an ever-growing raw reward scale.
-
     """
 
     def __init__(self, momentum=0.01, eps=1e-6):
@@ -648,7 +568,6 @@ class RunningReturnNormalizer:
             self.mean = (1.0 - self.momentum) * self.mean + self.momentum * batch_mean
             self.var  = max((1.0 - self.momentum) * self.var + self.momentum * batch_var, self.eps)
 
-
     def normalize(self, returns_t):
         return (returns_t - self.mean) / ((self.var ** 0.5) + self.eps)
 
@@ -663,7 +582,6 @@ class RunningReturnNormalizer:
 
 def rollout(policy, pull_fn, obs_names, baseline_pulls, baseline_chi2,
     max_steps=10, verbose=True, trajectory_idx=1, total_trajectories=30):
-    # print("in rollout")
 
     # initial step
     current_state = SMEFTState(pulls=np.array(baseline_pulls, dtype=np.float32), chi2=float(baseline_chi2), obs_names=obs_names)
@@ -676,7 +594,7 @@ def rollout(policy, pull_fn, obs_names, baseline_pulls, baseline_chi2,
     accepted_op_indices = []
 
     # Training quantities
-    log_probs, entropies, attentions, diagnostics = [], [], [], []
+    log_probs, entropies, attentions = [], [], []
 
     # V(s_t)
     state_values = []
@@ -687,7 +605,7 @@ def rollout(policy, pull_fn, obs_names, baseline_pulls, baseline_chi2,
     if verbose: print(f"\n--- Trajectory " f"[{trajectory_idx:02d} / " f"{total_trajectories:02d}] ---")
 
     for step_idx in range(max_steps):
-        (logits, state_val, attn_weights, diag) = policy(current_state, fired_ops=all_evaluated_op_indices)
+        (logits, state_val, attn_weights) = policy(current_state, fired_ops=all_evaluated_op_indices)
 
         # Policy distribution
         dist = torch.distributions.Categorical(logits=logits)
@@ -699,7 +617,6 @@ def rollout(policy, pull_fn, obs_names, baseline_pulls, baseline_chi2,
         log_probs.append(dist.log_prob(action))
         entropies.append(dist.entropy())
         attentions.append(attn_weights.detach())
-        diagnostics.append(diag)
 
         # IMPORTANT: This is V(s_t), i.e. the value BEFORE taking action a_t.
         state_values.append(state_val)
@@ -712,12 +629,11 @@ def rollout(policy, pull_fn, obs_names, baseline_pulls, baseline_chi2,
         # Environment transition. The active operators define the current SMEFT theory.
         trial_ops = (list(current_state.active_ops) + [proposed_op])
 
-        ( trial_pulls, trial_chi2, _, _) = pull_fn(trial_ops)
+        ( trial_pulls, trial_chi2, _) = pull_fn(trial_ops)
 
-
-        trial_chi2 = float( trial_chi2 )
-        old_chi2 = float( current_state.chi2 )
-        delta_raw = ( trial_chi2 - old_chi2 )
+        trial_chi2 =  trial_chi2 
+        old_chi2 = current_state.chi2
+        delta_raw = trial_chi2 - old_chi2
 
         accepted = False
 
@@ -764,31 +680,27 @@ def rollout(policy, pull_fn, obs_names, baseline_pulls, baseline_chi2,
         "entropies": torch.stack(entropies),
         "state_values": torch.stack( state_values ),
         "attention": attentions,
-        "diagnostics": diagnostics,
         "history": history,
     }
 
 
 # ============================================================
-# TRAINING PARAMETERS
+# HYPERPARAMETERS
 # ============================================================
 
-MAX_STEPS = 6
-ROLLOUTS_PER_BATCH = 15
-N_BATCHES = 50
+MAX_STEPS = 10
+ROLLOUTS_PER_BATCH = 25
+N_BATCHES = 300
 
 deltachi2_min = 1e-2
 
-GRAD_CLIP = 0.5
-
-GAMMA = 0.7
+GAMMA = 0.99
 
 CRITIC_LOSS_COEF = 0.5
 
 ADV_NORMALIZE = True
 
 RETURN_NORM_MOMENTUM = 0.01
-
 
 # ============================================================
 # MODEL INITIALIZATION
@@ -807,89 +719,36 @@ optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
 
 return_normalizer = (RunningReturnNormalizer(momentum=RETURN_NORM_MOMENTUM))
 
-
 # ============================================================
 # OUTPUT
 # ============================================================
 OUTPUT_DIR = Path(__file__).parent
-
-METRICS_LOG_PATH = os.path.join(OUTPUT_DIR,"metrics_log_vArxiv.txt")
 THEORY_ARCHIVE_PATH = os.path.join(OUTPUT_DIR, "theory_archive_vArxiv.json")
-REWARD_DISTS_PATH = os.path.join(OUTPUT_DIR, "reward_distributions_vArxiv.json")
-
-
-# METRICS
-
-with open(METRICS_LOG_PATH, "w") as f:
-    f.write(
-        "batch\t"
-        "mean_traj_reward\t"
-        "max_traj_reward\t"
-        "mean_delta_chi2\t"
-        "actor_loss\t"
-        "critic_loss\t"
-        "entropy_loss\t"
-        "total_loss\t"
-        "alpha\t"
-        "beta\t"
-        "mean_advantage\t"
-        "raw_advantage_mean\t"
-        "raw_advantage_std\t"
-        "mean_abs_raw_advantage\t"
-        "max_abs_raw_advantage\t"
-        "explained_variance\t"
-        "return_mean\t"
-        "return_std\t"
-        "grad_norm\n"
-    )
-
 
 if not os.path.exists(THEORY_ARCHIVE_PATH):
     with open(THEORY_ARCHIVE_PATH, "w") as f: json.dump( [], f, indent=2)
 
-if not os.path.exists( REWARD_DISTS_PATH):
-    with open(REWARD_DISTS_PATH, "w") as f: json.dump({}, f, indent=2)
-
-
 theory_archive = []
 
-reward_distributions = {}
-
-best_reward = -float("inf")
-
-best_ops = None
-
+entropy_coeff_arr = [0.01 * (1.0 - batch_idx / float(N_BATCHES)) + 0.0001 * batch_idx / float(N_BATCHES) 
+                     for batch_idx in range(N_BATCHES)] 
 
 # TRAINING LOOP
-
 for batch_idx in range(N_BATCHES):
 
     model.train()
 
-    progress = (batch_idx / float(N_BATCHES))
-
-    entropy_coef = (0.01 * (1.0 - progress) + 0.0001 * progress)
-
     batch_traj_rewards = []
     batch_delta_chi2 = []
-    batch_ops = []
 
     # Step-level quantities
-
     all_log_probs = []
     all_entropies = []
     all_state_values = []
     all_returns = []
 
-    # Diagnostics
-
-    batch_attn_correlations = []
-    batch_base_norms = []
-    batch_direct_norms = []
-
     print("\n==================== " f"BATCH {batch_idx:03d} " "====================")
 
-    # ROLLOUTS
     for rollout_idx in range(ROLLOUTS_PER_BATCH):
         result = rollout(
             policy=model,
@@ -898,18 +757,14 @@ for batch_idx in range(N_BATCHES):
             baseline_pulls= BASELINE_PULLS,
             baseline_chi2= CHI2_SM,
             max_steps= MAX_STEPS,
-            verbose=True,
+            verbose=False,
             trajectory_idx= rollout_idx + 1,
             total_trajectories= ROLLOUTS_PER_BATCH)
         
         final_state = result["final_state"]
-
         hist = result["history"]
-
         traj_ops = result["ops"]
-
         traj_len = len(traj_ops)
-
 
         (traj_reward, delta_chi2) = compute_rollout_reward(
             final_state= final_state,
@@ -918,26 +773,20 @@ for batch_idx in range(N_BATCHES):
             history= hist,
             alpha_step=0.1,
             dead_step_penalty=0.5,
-
         )
 
-        step_rewards = (compute_step_rewards(hist, alpha_step=0.1, dead_step_penalty=0.5))
-        returns_to_go = (compute_returns_to_go(step_rewards, gamma=GAMMA))
+        step_rewards = compute_step_rewards(hist, alpha_step=0.1, dead_step_penalty=0.5)
+        returns_to_go = compute_returns_to_go(step_rewards, gamma=GAMMA)
 
         returns_t = torch.tensor(returns_to_go, dtype=torch.float32, device=DEVICE)
 
         # STORE ACTOR / CRITIC DATA
-
         all_log_probs.append(result["log_probs"])
-
         all_entropies.append(result["entropies"])
-
         all_state_values.append(result["state_values"])
-
         all_returns.append(returns_t)
 
         # ARCHIVE
-
         theory_archive.append({
             "batch": batch_idx,
             "rollout": rollout_idx,
@@ -951,170 +800,48 @@ for batch_idx in range(N_BATCHES):
             "history": hist
         })
 
-        with open(THEORY_ARCHIVE_PATH, "w") as f:
-            json.dump(theory_archive, f, indent=2)
-
-        # BATCH LOGGING
-
         batch_traj_rewards.append(float(traj_reward))
-
         batch_delta_chi2.append(float(delta_chi2))
 
-        batch_ops.append(traj_ops)
 
-        # ATTENTION DIAGNOSTICS
-
-        for (attn_matrix, diag) in zip(result["attention"], result["diagnostics"]):
-
-            abs_pulls = np.abs(diag["pulls"])
-
-            if np.sum(abs_pulls) > 0:
-                step_corrs = []
-                attn_np = (attn_matrix.cpu().numpy())
-
-                for op_idx in range(attn_np.shape[0]):
-
-                    row_attn = (attn_np[op_idx])
-                    corr, _ = scipy.stats.spearmanr(row_attn, abs_pulls)
-
-                    if not np.isnan(corr): step_corrs.append(corr)
-
-                if step_corrs: batch_attn_correlations.append(np.mean(step_corrs))
-
-            batch_base_norms.append(torch.norm(diag["base_logits"]).cpu().item())
-
-        if (traj_reward > best_reward): best_reward = traj_reward; best_ops = list(traj_ops)
-
-    reward_distributions[f"batch_{batch_idx}"] = batch_traj_rewards
-
-    # FLATTEN ALL STEPS
-
-    flat_log_probs = torch.cat(all_log_probs)
-    flat_entropies = torch.cat(all_entropies)
-    flat_values = torch.cat(all_state_values)
-    flat_returns = torch.cat(all_returns)
-
+    # write in the file not every step
+    if batch_idx%20==0 or batch_idx == N_BATCHES - 1:
+        with open(THEORY_ARCHIVE_PATH, "w") as f: json.dump(theory_archive, f, indent=2)
 
     # NORMALIZED RETURNS
-    flat_returns_norm = (return_normalizer.update_and_normalize(flat_returns))
-
+    flat_returns_norm = (return_normalizer.update_and_normalize(torch.cat(all_returns)))
+    # FLATTEN ALL STEPS
+    flat_values = torch.cat(all_state_values)
 
     # RAW ADVANTAGE G_t is the Monte-Carlo Q estimate. V(s_t) is the critic. Therefore: A_t = G_t - V(s_t)
-
-    raw_advantages = ( flat_returns_norm - flat_values.detach())
-
-    raw_advantage_mean = (raw_advantages.mean())
-    raw_advantage_std = (raw_advantages.std())
-    mean_abs_raw_advantage = (raw_advantages.abs().mean())
-    max_abs_raw_advantage = (raw_advantages.abs().max())
-
-    # EXPLAINED VARIANCE
-
-    target_var = (flat_returns_norm.detach().var())
-
-    if target_var.item() > 1e-8:
-        explained_variance = (1.0 - ( flat_returns_norm.detach() - flat_values.detach()).var() / ( target_var + 1e-8))
-
-    else: explained_variance = torch.tensor( 0.0, device=DEVICE )
-
     # ADVANTAGE NORMALIZATION
-
-    advantages = raw_advantages
+    advantages = ( flat_returns_norm - flat_values.detach())
 
     if (ADV_NORMALIZE and advantages.numel() > 1 and advantages.std().item() > 1e-6):
         advantages = ( ( advantages - advantages.mean() ) / ( advantages.std() + 1e-8 ) )
 
-    actor_loss = -(advantages.detach() * flat_log_probs).mean()
-
+    actor_loss = -(advantages.detach() * torch.cat(all_log_probs)).mean()
     critic_loss = nn.functional.mse_loss(flat_values, flat_returns_norm.detach())
+    entropy_loss = (-entropy_coeff_arr[batch_idx] * torch.cat(all_entropies).mean())
 
-    entropy_loss = (-entropy_coef * flat_entropies.mean())
-
-    total_loss = (actor_loss + CRITIC_LOSS_COEF * critic_loss + entropy_loss)
+    total_loss = actor_loss + CRITIC_LOSS_COEF * critic_loss + entropy_loss
 
     # BACKPROP
     optimizer.zero_grad(set_to_none=True)
-
     total_loss.backward()
-
-    # GRADIENT CLIPPING
-    raw_grad_norm = (torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP).item())
-
     optimizer.step()
-
-    # ========================================================
-    # BATCH METRICS
-    # ========================================================
-
-    batch_mean_traj_reward = float(np.mean(batch_traj_rewards))
-
-    batch_max_traj_reward = float(np.max(batch_traj_rewards))
-
-    batch_mean_delta_chi2 = float(np.mean(batch_delta_chi2))
-
-    return_std = (return_normalizer.var** 0.5)
-
-    # ========================================================
-    # SAVE METRICS
-    # ========================================================
-
-    with open( METRICS_LOG_PATH, "a") as f:
-
-        f.write(
-            f"{batch_idx}\t"
-            f"{batch_mean_traj_reward:.6f}\t"
-            f"{batch_max_traj_reward:.6f}\t"
-            f"{batch_mean_delta_chi2:.6f}\t"
-            f"{actor_loss.item():.6f}\t"
-            f"{critic_loss.item():.6f}\t"
-            f"{entropy_loss.item():.6f}\t"
-            f"{total_loss.item():.6f}\t"
-            f"{model.alpha.item():.6f}\t"
-            f"{model.beta.item():.6f}\t"
-            f"{advantages.mean().item():.6f}\t"
-            f"{raw_advantage_mean.item():.6f}\t"
-            f"{raw_advantage_std.item():.6f}\t"
-            f"{mean_abs_raw_advantage.item():.6f}\t"
-            f"{max_abs_raw_advantage.item():.6f}\t"
-            f"{explained_variance.item():.6f}\t"
-            f"{return_normalizer.mean:.6f}\t"
-            f"{return_std:.6f}\t"
-            f"{raw_grad_norm:.6f}\n"
-        )
-
-    # ========================================================
-    # PRINT SUMMARY
-    # ========================================================
 
     print(f"\n>>> SUMMARY " f"BATCH {batch_idx:03d} <<<")
 
     print(
-        f"Actor: "
-        f"{actor_loss.item():.4f} | "
-        f"Critic: "
-        f"{critic_loss.item():.4f} | "
-        f"Entropy: "
-        f"{entropy_loss.item():.4f} | "
-        f"Mean Deltachi^2: "
-        f"{batch_mean_delta_chi2:.2f} | "
-        f"Max Traj Reward: {batch_max_traj_reward:.1f}"
+        f"Actor: {actor_loss.item():.4f} | "
+        f"Critic: {critic_loss.item():.4f} | "
+        f"Entropy: {entropy_loss.item():.4f} | "
+        f"Mean Deltachi^2: {np.mean(batch_delta_chi2):.2f} | "
+        f"Max Traj Reward: {np.max(batch_traj_rewards):.1f}"
     )
 
-    print(
-        f"Return mean: "
-        f"{return_normalizer.mean:.4f} | "
-        f"Return std: "
-        f"{return_std:.4f} | "
-        f"Mean |Raw Adv|: "
-        f"{mean_abs_raw_advantage.item():.4f} | "
-        f"Raw Adv Std: "
-        f"{raw_advantage_std.item():.4f} | "
-        f"Explained Var: "
-        f"{explained_variance.item():.4f}"
-    )
-
-    print(f"Gradient norm: " f"{raw_grad_norm:.4f}")
-
+    # print(f"Gradient norm: " f"{raw_grad_norm:.4f}")
 
 
 with open(THEORY_ARCHIVE_PATH, "r") as f: results = json.load(f)
@@ -1130,16 +857,14 @@ for theory in results:
         unique_theories[key] = theory
 
 # Sort unique theories by reward
-top_theories = sorted(unique_theories.values(), key=lambda theory: theory["traj_reward"], reverse=True)[:20]
+top_theories = sorted(unique_theories.values(), key=lambda theory: theory["traj_reward"], reverse=True)[:50]
 
-print("\n========== TOP 20 UNIQUE THEORIES ==========\n")
+print("\n========== TOP 50 UNIQUE THEORIES ==========\n")
 for rank, theory in enumerate(top_theories, start=1):
     print( f"{rank:2d}. "
            f"Reward = {theory['traj_reward']:.6f}, "
            f"Operators = {sorted(theory['operators'])}, "
-        # f"chi2_min = {theory['chi2_min']:.4f}, "
            f"Δχ² = {theory['delta_chi2']:.4f}")
     
 print("Total computation time :", time.time()-debut, " sec")
-
 input("")
