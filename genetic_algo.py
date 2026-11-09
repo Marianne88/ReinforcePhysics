@@ -18,7 +18,7 @@ valid_solutions = {}
 delta_chi2_min = 140
 rng = np.random.default_rng(SEED)
 
-def genetic_algorithm(population_size=25, n_generations=600, elite_size=2, tournament_size=3, mutation_rate=0.2, crossover_rate = 0.3):
+def genetic_algorithm(population_size=25, n_generations=500, elite_size=2, tournament_size=3, mutation_rate=0.2, crossover_rate = 0.3):
     """
     Genetic algorithm for fixed-cardinality operator selection.
 
