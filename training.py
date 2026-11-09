@@ -23,13 +23,11 @@ if fictitious_anomalies:
     # define minimal solution
     cut_all, N = 140, 6
     N_BATCHES = 500
-    emb_dim = 64
     
 else:
     # define minimal solution
     cut_all, N = 20, 2
-    N_BATCHES = 300
-    emb_dim = 48
+    N_BATCHES = 200
     
 # --- ACTOR MODEL --- #
 class ActorModel(nn.Module):
@@ -49,7 +47,7 @@ class ActorModel(nn.Module):
 N_STEPS = 10; N_ROLLOUTS = 25
 p_val = 0.1
 
-model = ActorModel(embed_dim = emb_dim)
+model = ActorModel(embed_dim = 64)
 # initialize weights and bias to 0 so initially every operator has the same chance of being selected
 nn.init.zeros_(model.actor_head[-1].weight); nn.init.zeros_(model.actor_head[-1].bias)
 
